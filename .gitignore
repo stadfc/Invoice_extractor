@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.idea/
+.pytest_cache/
+*.xlsx
+excel_import*/
+excel_import_v*/
+.env
+*.json
+!bormioli_config.json
