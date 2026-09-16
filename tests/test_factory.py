@@ -22,5 +22,6 @@ class FactoryTests(unittest.TestCase):
                 "Bormioli Luigi",
                 "Pintinox",
                 "Churchill",
+                "Karlowsky",
             ],
         )

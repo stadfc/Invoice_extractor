@@ -6,6 +6,7 @@ from parsers.contacto import ContactoInvoiceParser
 from parsers.bormioli import BormioliLuigiInvoiceParser
 from parsers.pintinox import PintinoxInvoiceParser
 from parsers.churchill import ChurchillInvoiceParser
+from parsers.karlowsky import KarlowskyInvoiceParser
 
 class InvoiceParserFactory:
     """Fabryka odpowiedzialna za automatyczny dobór odpowiedniego parsera."""
@@ -19,6 +20,7 @@ class InvoiceParserFactory:
             BormioliLuigiInvoiceParser(),
             PintinoxInvoiceParser(),
             ChurchillInvoiceParser(),
+            KarlowskyInvoiceParser(),
         ]
 
     def list_parsers(self) -> list[InvoiceParserStrategy]:

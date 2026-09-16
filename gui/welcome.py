@@ -39,7 +39,7 @@ class WelcomeWindow(tk.Toplevel):
         vendors.heading("vendor", text="Parser / dostawca")
         vendors.column("vendor", width=400, anchor=tk.W)
         for name in vendor_names:
-            vendors.insert("", tk.END, values=(name,))
+            vendors.insert("", tk.END, values=("* "+ name,))
         vendors.pack(fill=tk.BOTH, expand=True)
 
         ttk.Button(frame, text="Dalej", command=self.destroy).pack(pady=(12, 0), anchor=tk.E)
