@@ -13,6 +13,7 @@ class ChurchillDocument:
     invoice_total: float = 0.0
     freight: float = 0.0
     currency: str = "GBP"
+    invoice_date: str = ""
 
 
 class ChurchillInvoiceParser(InvoiceParserStrategy):
@@ -20,8 +21,8 @@ class ChurchillInvoiceParser(InvoiceParserStrategy):
     vendor_name = "Churchill"
     currency = "GBP"
 
-    DESCRIPTION_START = frozenset({"STONECAST", "WHITE", "STUDIO", "FREIGHT"})
     INVOICE_NO_RE = re.compile(r"\b(CD\d{10})\b")
+    INVOICE_DATE_RE = re.compile(r"\b(\d{2})/(\d{2})/(20\d{2})\b")
 
     def __init__(self):
         self.extracted_transport_cost = 0.0
@@ -74,6 +75,11 @@ class ChurchillInvoiceParser(InvoiceParserStrategy):
                 currency_match = re.search(r"\b(GBP|EUR|USD|PLN)\b", clean_line)
                 if currency_match and "SWIFT" not in clean_line.upper() and "IBAN" not in clean_line.upper():
                     documents[current_no].currency = currency_match.group(1)
+                if not documents[current_no].invoice_date and "PAYMENT DUE" not in upper:
+                    date_match = self.INVOICE_DATE_RE.search(clean_line)
+                    if date_match:
+                        day, month, year = date_match.groups()
+                        documents[current_no].invoice_date = f"{year}-{month}-{day}"
 
             if look_for_total and current_no:
                 total = self._parse_gbp_amount(clean_line)
@@ -104,6 +110,24 @@ class ChurchillInvoiceParser(InvoiceParserStrategy):
         return result
 
     @staticmethod
+    def _split_code(left: list[str]) -> tuple[list[str], list[str]]:
+        """The code ends on the token that finishes with the digit 1.
+
+        ``EMBLEM401`` has no space. ``SWHSESS 1`` and ``ZCA PO111`` do.
+        The description (EMERGE, MENU, RAKU, STONECAST) starts after that 1.
+        """
+        for index, token in enumerate(left):
+            if token.endswith("1"):
+                return left[: index + 1], left[index + 1 :]
+        last_digit = -1
+        for index, token in enumerate(left):
+            if any(character.isdigit() for character in token):
+                last_digit = index
+        if last_digit < 0:
+            return left, []
+        return left[: last_digit + 1], left[last_digit + 1 :]
+
+    @staticmethod
     def format_item_code(raw_code: str) -> str:
         compact = re.sub(r"\s+", "", raw_code).upper()
         return f"CH-{compact}"
@@ -123,13 +147,7 @@ class ChurchillInvoiceParser(InvoiceParserStrategy):
             return None
 
         left = parts[:-4]
-        code_parts: list[str] = []
-        desc_parts: list[str] = []
-        for index, token in enumerate(left):
-            if token.upper() in self.DESCRIPTION_START:
-                desc_parts = left[index:]
-                break
-            code_parts.append(token)
+        code_parts, desc_parts = self._split_code(left)
         if not code_parts:
             return None
 

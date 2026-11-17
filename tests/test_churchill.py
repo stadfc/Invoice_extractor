@@ -54,6 +54,35 @@ class ChurchillParserTests(unittest.TestCase):
         self.assertAlmostEqual(docs[2].invoice_total, 121.88)
         self.assertEqual(docs[0].currency, "GBP")
 
+    def test_code_ends_on_the_digit_one_with_or_without_a_space(self):
+        lines = [
+            "INVOICE FOR PAYMENT PURPOSES",
+            "CD2009306662 1/3",
+            "ST6 5NZ, UK 16/10/2026 MAR006",
+            "EMBLEM401 EMERGE OSLO BLUE BOWL 6912002310 6 9.1900 55.14",
+            "SWHSESS 1 STONECAST BARLEY WHITE 6912002310 24 2.5650 61.56",
+            "SWHSSJ2 1 STONECAST BARLEY WHITE 6912002310 24 3.5008 84.02",
+            "ZCA PO111 MENU PORCELAIN MID RIM 6911100090 36 3.2250 116.10",
+            "WH BOJM1 WHITE BIT ON THE SIDE JUG 6912002310 12 8.1400 97.68",
+            "Invoice total",
+            "GBP 414.50",
+        ]
+        docs = ChurchillInvoiceParser().parse_documents(lines)
+        codes = [row[1] for row in docs[0].products]
+        names = [row[3] for row in docs[0].products]
+        self.assertEqual(codes, [
+            "CH-EMBLEM401",
+            "CH-SWHSESS1",
+            "CH-SWHSSJ21",
+            "CH-ZCAPO111",
+            "CH-WHBOJM1",
+        ])
+        self.assertTrue(names[0].startswith("EMERGE"))
+        self.assertTrue(names[1].startswith("STONECAST"))
+        self.assertTrue(names[3].startswith("MENU"))
+        self.assertTrue(names[4].startswith("WHITE"))
+        self.assertEqual(docs[0].invoice_date, "2026-10-16")
+
     def test_freight_is_spread_into_import_prices(self):
         df = pd.DataFrame(
             [

@@ -23,5 +23,7 @@ class FactoryTests(unittest.TestCase):
                 "Pintinox",
                 "Churchill",
                 "Karlowsky",
+                "Mesa Ceramics",
+                "Bonna",
             ],
         )

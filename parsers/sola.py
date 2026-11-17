@@ -7,16 +7,23 @@ class SolaInvoiceParser(InvoiceParserStrategy):
 
     def __init__(self):
         self.extracted_transport_cost = 0.0
+        self.invoice_number = ""
+        self.invoice_date = ""
 
     def parse(self, page_text_list: list[str]) -> tuple[list[list], float]:
         products_matrix = []
         pdf_total_amount = 0.0
         self.extracted_transport_cost = 0.0
+        self.invoice_number = ""
+        self.invoice_date = ""
 
-        # Qty may use a space as thousands separator, e.g. "1 200 pc."
+        # Qty and the line value may use a space as the thousands separator.
+        # The unit is "pc." or "Set"; freight lines have no unit.
         product_main_regex = re.compile(
-            r"^(\d+)\s+([A-Z0-9]+)\s+(\d+(?:\s\d{3})*)\s+(?:pc\.\s+)?([0-9.,]+)\s+([0-9.,]+)$"
+            r"^(\d+)\s+([A-Z0-9]+)\s+(\d+(?:\s\d{3})*)\s+(?:(?!\d)\S+\s+)?(\d[\d.]*,\d+)\s+(\d[\d\s.]*,\d+)$"
         )
+        invoice_no_re = re.compile(r"^Invoice\s*:?\s*(\d+)\s*$", re.IGNORECASE)
+        document_date_re = re.compile(r"Document date\s*:\s*(\d{2})\.\s*(\d{2})\.\s*(\d{4})", re.IGNORECASE)
 
         current_product = None
         block_terminators = ["subtotal", "grand total", "our general", "order confirmation", "kind regards", "page :"]
@@ -27,6 +34,14 @@ class SolaInvoiceParser(InvoiceParserStrategy):
                 continue
 
             clean_line_lower = clean_line.lower()
+
+            invoice_match = invoice_no_re.match(clean_line)
+            if invoice_match:
+                self.invoice_number = invoice_match.group(1)
+            date_match = document_date_re.search(clean_line)
+            if date_match:
+                day, month, year = date_match.groups()
+                self.invoice_date = f"{year}-{month}-{day}"
 
             if "grand total eur" in clean_line_lower:
                 parts = clean_line.split(" ")
@@ -50,8 +65,11 @@ class SolaInvoiceParser(InvoiceParserStrategy):
                 pos = match.group(1)
                 code = match.group(2)
                 qty = int(match.group(3).replace(" ", ""))
-                price = float(match.group(4).replace(".", "").replace(",", "."))
-                value = float(match.group(5).replace(".", "").replace(",", "."))
+                price = self._amount(match.group(4))
+                value = self._amount(match.group(5))
+
+                if value <= 0 or qty <= 0:
+                    continue
 
                 if code == "S001" or "freight" in clean_line_lower:
                     self.extracted_transport_cost = value
@@ -90,6 +108,10 @@ class SolaInvoiceParser(InvoiceParserStrategy):
             pdf_total_amount = round(sum(row[6] for row in products_matrix), 4)
 
         return products_matrix, pdf_total_amount
+
+    @staticmethod
+    def _amount(text: str) -> float:
+        return float(text.replace(" ", "").replace(".", "").replace(",", "."))
 
     def _finalize_product(self, prod_dict: dict) -> list:
         description = " ".join(prod_dict["description_lines"]).strip()

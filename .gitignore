@@ -7,5 +7,6 @@ __pycache__/
 excel_import*/
 excel_import_v*/
 .env
+symfonia.env
 *.json
 !bormioli_config.json

@@ -65,6 +65,10 @@ class KarlowskyParserTests(unittest.TestCase):
             KarlowskyInvoiceParser.format_item_code("BPF 3", "06", "2XL"),
             "KAR-BPF3/6/2XL",
         )
+        self.assertEqual(
+            KarlowskyInvoiceParser.format_item_code("HM 12", "03", "46/S"),
+            "KAR-HM12/3/46/s",
+        )
 
     def test_splits_colour_and_size_into_separate_rows(self):
         parser = KarlowskyInvoiceParser()
@@ -102,6 +106,66 @@ class KarlowskyParserTests(unittest.TestCase):
         self.assertAlmostEqual(total, 180.36)
         self.assertAlmostEqual(parser.extracted_transport_cost, 12.65)
         self.assertEqual(parser.invoice_number, "246239")
+
+    def test_numeric_sizes_wrap_onto_the_next_line(self):
+        lines = """
+Invoice no.: 249125
+Date: 16.10.2026
+RCJF 15/01 black 36 38 40 42 44 46 48 50 10 33,59 335,90
+1 1 1 1 1 1 1 1
+52 54
+1 1
+RCJM 20/01 black 46 48 50 52 54 56 60 7 33,59 235,13
+1 1 1 1 1 1 1
+RCHF 4/01 black 40 42 44 46 48 50 52 54 8 32,57 260,56
+1 1 1 1 1 1 1 1
+amount: 814,96
+""".strip().splitlines()
+        parser = KarlowskyInvoiceParser()
+        rows, total = parser.parse(lines)
+        codes = [row[1] for row in rows]
+        self.assertEqual(parser.invoice_date, "2026-10-16")
+        self.assertEqual(codes[:2], ["KAR-RCJF15/1/36", "KAR-RCJF15/1/38"])
+        self.assertEqual(codes[8:10], ["KAR-RCJF15/1/52", "KAR-RCJF15/1/54"])
+        self.assertIn("KAR-RCJM20/1/60", codes)
+        self.assertIn("KAR-RCHF4/1/40", codes)
+        self.assertEqual(sum(row[2] for row in rows), 25)
+        self.assertAlmostEqual(sum(row[6] for row in rows), 814.96, places=2)
+        self.assertAlmostEqual(rows[0][4], 32.9176, places=4)
+        self.assertAlmostEqual(total, 814.96)
+
+    def test_short_leg_size_with_a_slash_is_its_own_code(self):
+        lines = """
+Invoice no.: 251655
+Date: 16.11.2026
+HM 12/03 white 46/s 3 25,30 75,90
+3
+JM 24/16 vintage black 54 2 29,33 58,66
+2
+JM 25/03 white 56 2 36,78 73,56
+2
+JM 25/10 navy 56 1 39,85 39,85
+1
+postage: 12,65
+amount: 260,62
+""".strip().splitlines()
+        parser = KarlowskyInvoiceParser()
+        rows, total = parser.parse(lines)
+        codes = [row[1] for row in rows]
+        self.assertEqual(
+            codes,
+            [
+                "KAR-HM12/3/46/s",
+                "KAR-JM24/16/54",
+                "KAR-JM25/3/56",
+                "KAR-JM25/10/56",
+            ],
+        )
+        self.assertEqual(rows[0][2], 3)
+        self.assertAlmostEqual(rows[0][4], 25.30, places=2)
+        self.assertAlmostEqual(sum(row[6] for row in rows), 247.97, places=2)
+        self.assertAlmostEqual(total, 260.62)
+        self.assertAlmostEqual(parser.extracted_transport_cost, 12.65)
 
     def test_factory_detects_karlowsky(self):
         parser = InvoiceParserFactory().get_parser_for_text(

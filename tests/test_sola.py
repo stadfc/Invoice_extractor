@@ -42,3 +42,29 @@ class SolaParserTests(unittest.TestCase):
         self.assertEqual(rows[0][1], "SS-107008")
         self.assertEqual(rows[0][2], 300)
         self.assertAlmostEqual(parser.extracted_transport_cost, 75.00)
+
+    def test_set_unit_spaced_value_and_zero_pallet(self):
+        lines = [
+            "Invoice 261505631",
+            "Document date : 08. 10. 2026",
+            "1 118792 1 Set 27,162 27,16",
+            "Basic Country II Lunasol",
+            "EAN: 7640159097396",
+            "6 123452 1 200 pc. 1,000 1 200,00",
+            "Athene CR all mirror",
+            "EAN: 7640159093725",
+            "9 900079 1 pc. 0,000 0,00",
+            "Disposable pallet",
+            "Grand total EUR 2 675,33",
+        ]
+        parser = SolaInvoiceParser()
+        rows, total = parser.parse(lines)
+        self.assertEqual(parser.invoice_number, "261505631")
+        self.assertEqual(parser.invoice_date, "2026-10-08")
+        self.assertEqual([row[1] for row in rows], ["SS-118792", "SS-123452"])
+        self.assertEqual(rows[0][2], 1)
+        self.assertAlmostEqual(rows[0][4], 27.162)
+        self.assertAlmostEqual(rows[0][6], 27.16)
+        self.assertEqual(rows[1][2], 1200)
+        self.assertAlmostEqual(rows[1][6], 1200.00)
+        self.assertAlmostEqual(total, 2675.33)

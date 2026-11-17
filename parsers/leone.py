@@ -17,25 +17,40 @@ class LeoneInvoiceParser(InvoiceParserStrategy):
         )
 
         current_product = None
+        self.invoice_number = ""
+        self.invoice_date = ""
+        invoice_no = re.compile(r"\b(\d{6}/\d{2}[A-Z])\s+(\d{2})/(\d{2})/(\d{4})\b")
+        # pdfplumber often puts the summary labels and the amounts on two lines:
+        # "Totale fattura" then "0,00 1.091,41 0,00 1.091,41"
+        pending_total = False
 
         for line in page_text_list:
             clean_line = line.strip()
             if not clean_line:
                 continue
 
-            # 1. Odczyt ostatecznej kwoty faktury z podsumowania (np. Totale fattura, Totale da pagare, Imponibile + Imposta)
+            if not self.invoice_number:
+                number_match = invoice_no.search(clean_line)
+                if number_match:
+                    self.invoice_number = number_match.group(1)
+                    day, month, year = number_match.group(2), number_match.group(3), number_match.group(4)
+                    self.invoice_date = f"{year}-{month}-{day}"
+
+            if pending_total:
+                pending_total = False
+                total = self._last_positive_amount(clean_line)
+                if total is not None:
+                    pdf_total_amount = total
+                    continue
+
+            # 1. Invoice total. The payable amount wins when both labels exist,
+            # so a later "Totale da pagare" replaces "Totale fattura".
             if any(term in clean_line for term in ["Totale fattura", "Totale da pagare", "Imponibile + Imposta"]):
-                parts = clean_line.split()
-                for part in reversed(parts):
-                    # Radzimy sobie z zapisem 1.190,92 oraz 1.190.92
-                    cleaned_val = part.replace(".", "").replace(",", ".")
-                    try:
-                        val = float(cleaned_val)
-                        if val > 0:
-                            pdf_total_amount = val
-                            break
-                    except ValueError:
-                        pass
+                total = self._last_positive_amount(clean_line)
+                if total is not None:
+                    pdf_total_amount = total
+                else:
+                    pending_total = True
 
             # Pomiń nagłówki tabeli i adnotacje stopki
             if clean_line.startswith("Articolo") or clean_line.startswith("NON SI ACCETTANO"):
@@ -108,6 +123,22 @@ class LeoneInvoiceParser(InvoiceParserStrategy):
             pdf_total_amount = round(pdf_total_amount, 4)
 
         return products_matrix, pdf_total_amount
+
+    @staticmethod
+    def _last_positive_amount(clean_line: str) -> float | None:
+        """Last European amount on a line (1.091,41 or 1.190.92)."""
+        found = None
+        for part in clean_line.replace("€", " ").split():
+            if not any(ch.isdigit() for ch in part):
+                continue
+            cleaned = part.replace(".", "").replace(",", ".")
+            try:
+                val = float(cleaned)
+            except ValueError:
+                continue
+            if val > 0:
+                found = val
+        return found
 
     def _finalize_product(self, prod_dict: dict) -> list:
         return [

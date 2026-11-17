@@ -5,7 +5,24 @@ from pathlib import Path
 import pandas as pd
 
 from parsers.factory import InvoiceParserFactory
-from pipeline import format_for_import, format_money, parse_invoices
+from pipeline import format_for_import, format_money, needs_manual_transport, parse_invoices
+
+
+def _buffer_transport_note(transport: float, currency: str, included: float = 0.0) -> str:
+    if transport < -0.005:
+        amount = format_money(abs(transport), currency)
+        return (
+            f"Ta faktura ma transport większy niż udział tej dostawy. "
+            f"Dokument zakupu zostaje jak na PDF, a wartość magazynowa jest niższa o {amount}."
+        )
+    if transport > 0.005:
+        return f"Transport {format_money(transport, currency)} trafi w pole inne na kartach."
+    if included > 0.005:
+        return (
+            f"Transport z faktury {format_money(included, currency)} "
+            "jest doliczony do cen pozycji."
+        )
+    return "Na tej fakturze nie ma dodatkowego transportu."
 from gui.welcome import WelcomeWindow
 
 
@@ -14,7 +31,7 @@ class InvoiceParserApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Uniwersalny Ekstraktor Produktów z Faktur")
-        self.root.geometry("900x600")
+        self.root.geometry("980x640")
 
         self.parser_factory = InvoiceParserFactory()
         self.df = pd.DataFrame()
@@ -68,6 +85,28 @@ class InvoiceParserApp:
         )
         self.invoice_combo.pack(side=tk.LEFT, padx=5)
         self.invoice_combo.bind("<<ComboboxSelected>>", self.on_invoice_selected)
+
+        sym_row = ttk.Frame(top_frame)
+        sym_row.pack(side=tk.TOP, fill=tk.X, pady=(8, 0))
+
+        self.btn_codes = ttk.Button(
+            sym_row,
+            text="Sprawdź kody w Symfonii",
+            command=self.check_symfonia,
+            state=tk.DISABLED,
+        )
+        self.btn_codes.pack(side=tk.LEFT, padx=5)
+
+        self.btn_buffer = ttk.Button(
+            sym_row,
+            text="Zapisz WNT w buforze",
+            command=self.save_symfonia,
+            state=tk.DISABLED,
+        )
+        self.btn_buffer.pack(side=tk.LEFT, padx=5)
+
+        self.btn_rates = ttk.Button(sym_row, text="Kursy", command=self.edit_rates)
+        self.btn_rates.pack(side=tk.LEFT, padx=5)
 
         self.lbl_status = ttk.Label(
             top_frame,
@@ -150,7 +189,7 @@ class InvoiceParserApp:
             self.invoice_combo.config(state="readonly" if len(documents) > 1 else "disabled")
 
             if first.transport_cost <= 0.0:
-                if self.current_vendor in ["Leone", "Sola Swiss"]:
+                if needs_manual_transport(self.current_vendor, first.transport_cost):
                     self.prompt_for_transport(force=True)
                     self.documents[0] = replace(
                         first,
@@ -189,6 +228,10 @@ class InvoiceParserApp:
         self.current_vendor = doc.vendor
         self.current_invoice_number = doc.invoice_number
         self.current_currency = doc.currency or "EUR"
+        from symfonia_import import purchase_document
+
+        doc_type, _series, _vat = purchase_document(doc.vendor)
+        self.btn_buffer.config(text=f"Zapisz {doc_type} w buforze")
         self.pdf_total_amount = doc.pdf_total_amount
         self.transport_cost = doc.transport_cost
         self.is_external_transport = doc.transport_is_external
@@ -201,6 +244,8 @@ class InvoiceParserApp:
         self.btn_save.config(state=tk.NORMAL)
         self.btn_remove_zeros.config(state=tk.NORMAL)
         self.btn_import_format.config(state=tk.NORMAL)
+        self.btn_codes.config(state=tk.NORMAL)
+        self.btn_buffer.config(state=tk.NORMAL)
         self.update_status_with_validation()
         if doc.transport_cost > 0.0 and not doc.transport_is_external:
             self.lbl_status.config(
@@ -209,6 +254,154 @@ class InvoiceParserApp:
                     f"{format_money(doc.transport_cost, self.current_currency)}"
                 )
             )
+
+    def edit_rates(self):
+        from gui.rates_window import RatesWindow
+
+        RatesWindow(self.root)
+
+    def _current_document(self):
+        if not self.documents:
+            return None
+        return self.documents[self.document_index]
+
+    def check_symfonia(self):
+        doc = self._current_document()
+        if doc is None or doc.rows.empty:
+            return
+        self.lbl_status.config(text="Status: Sprawdzanie kodów w Symfonii...")
+        self.root.update_idletasks()
+        try:
+            report = self._code_report(doc)
+        except Exception as exc:
+            messagebox.showerror("Symfonia", str(exc))
+            self.lbl_status.config(text="Status: Nie udało się sprawdzić kodów.")
+            return
+        present = sum(1 for item in report if item.present)
+        missing = len(report) - present
+        self.lbl_status.config(
+            text=f"Status: Kartoteka {present} z {len(report)}. Brak: {missing}."
+        )
+        from gui.symfonia_report import CodeReportWindow
+
+        title = (
+            f"{doc.vendor} {doc.invoice_number or ''}: "
+            f"w kartotece {present}, brak {missing}."
+        ).strip()
+        rows = [
+            (item.code, "jest" if item.present else "brak", item.name or "—")
+            for item in report
+        ]
+        CodeReportWindow(self.root, title, rows)
+
+    def save_symfonia(self):
+        doc = self._current_document()
+        if doc is None or doc.rows.empty:
+            return
+        from pipeline import prices_for_buffer
+        from symfonia_import import save_wnt_buffer
+
+        currency = (doc.currency or "EUR").upper()
+        try:
+            from exchange_rates import RateError, rate_for
+
+            used_rate = rate_for(currency)
+        except RateError as exc:
+            messagebox.showerror("Kurs waluty", str(exc))
+            return
+
+        try:
+            prices = prices_for_buffer(
+                doc.rows,
+                doc.pdf_total_amount,
+                doc.transport_cost,
+                transport_is_external=doc.transport_is_external,
+                warehouse_transport=doc.warehouse_transport,
+            )
+            report = self._code_report(doc)
+        except Exception as exc:
+            messagebox.showerror("Symfonia", str(exc))
+            return
+
+        missing = [item.code for item in report if not item.present]
+        rate_text = f"{used_rate:.4f}".replace(".", ",")
+        money = format_money(prices.document_total, doc.currency or "EUR")
+        included_transport = 0.0 if doc.transport_is_external else doc.transport_cost
+        transport_note = _buffer_transport_note(
+            prices.transport, doc.currency or "EUR", included_transport
+        )
+        from symfonia_import import purchase_document
+
+        doc_type, _series, _vat = purchase_document(doc.vendor)
+        duty_note = ""
+        if prices.duty > 0.005:
+            duty_note = (
+                f"\nCło antydumpingowe {format_money(prices.duty, doc.currency or 'EUR')} "
+                "trafi w pole Cło."
+            )
+        if missing:
+            preview = "\n".join(missing[:12])
+            extra = "" if len(missing) <= 12 else f"\n… i {len(missing) - 12} kolejnych"
+            agreed = messagebox.askyesno(
+                "Brakujące kody",
+                "Tych kodów nie ma w kartotece:\n"
+                f"{preview}{extra}\n\n"
+                "Utworzyć karty na wzór innego produktu tego dostawcy "
+                f"i zapisać {doc_type} {money} w buforze?\n"
+                f"{transport_note}{duty_note}\n"
+                f"Kurs {currency}: {rate_text}.",
+            )
+        else:
+            agreed = messagebox.askyesno(
+                "Bufor Symfonii",
+                f"Wszystkie kody ({len(report)}) są w kartotece.\n"
+                f"Zapisać {doc_type} {doc.invoice_number or ''} na {money} w buforze?\n"
+                f"{transport_note}{duty_note}\n"
+                f"Kurs {currency}: {rate_text}.\n"
+                "Cena zakupu na kartach zostanie ustawiona na cenę z tej faktury.",
+            )
+        if not agreed:
+            return
+
+        self.lbl_status.config(text="Status: Zapis dokumentu w buforze...")
+        self.root.update_idletasks()
+        try:
+            from symfonia_api import SymfoniaSession
+
+            with SymfoniaSession() as session:
+                result = save_wnt_buffer(
+                    session,
+                    vendor=doc.vendor,
+                    currency=doc.currency,
+                    invoice_number=doc.invoice_number,
+                    invoice_date=doc.invoice_date,
+                    prices=prices,
+                    create_missing=bool(missing),
+                    payment_days=doc.payment_days,
+                )
+        except Exception as exc:
+            messagebox.showerror("Symfonia", str(exc))
+            self.lbl_status.config(text="Status: Nie zapisano dokumentu.")
+            return
+
+        created = ""
+        if result.created_codes:
+            created = "\nNowe karty: " + ", ".join(result.created_codes)
+        messagebox.showinfo(
+            "Bufor Symfonii",
+            f"Dokument {result.number} jest w buforze.\n"
+            f"Wartość: {format_money(result.document_total, result.currency)}."
+            f"{created}",
+        )
+        self.lbl_status.config(text=f"Status: W buforze {result.number}.")
+
+    def _code_report(self, doc):
+        from symfonia_api import SymfoniaSession
+        from symfonia_import import check_codes
+
+        codes = [str(code) for code in doc.rows["Product_code"].tolist()]
+        with SymfoniaSession() as session:
+            return check_codes(session, codes)
 
     def prompt_for_transport(self, force=False):
         prompt_title = "Wymagany koszt transportu" if force else "Koszt transportu"
@@ -241,7 +434,7 @@ class InvoiceParserApp:
             self.tree.delete(row)
 
         for _, row in self.df.iterrows():
-            values = list(row)
+            values = [row[col] for col in self.columns]
 
             if self.is_import_format_active:
                 values[1] = f"{values[1]}"

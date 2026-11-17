@@ -8,7 +8,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pipeline import drop_zero_rows, format_for_import, format_money, needs_manual_transport
+from pipeline import (
+    ParseResult,
+    _spread_pack_freight,
+    drop_zero_rows,
+    format_for_import,
+    format_money,
+    needs_manual_transport,
+    prices_for_buffer,
+)
 
 
 class PipelineTests(unittest.TestCase):
@@ -75,6 +83,83 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(needs_manual_transport("Leone", 0.0))
         self.assertFalse(needs_manual_transport("Leone", 12.5))
         self.assertFalse(needs_manual_transport("APS", 0.0))
+
+    def test_carriage_printed_on_the_invoice_is_inside_the_unit_price(self):
+        df = pd.DataFrame(
+            [
+                ["1", "CO-A", 2, "board", 10.0, 0.0, 20.00],
+                ["2", "CO-B", 1, "measure", 5.0, 0.0, 5.00],
+            ],
+            columns=["EAN", "Product_code", "Qty_shipped", "Description", "Price", "Discount", "Value"],
+        )
+        result = prices_for_buffer(
+            df, pdf_total_amount=41.00, transport_cost=16.0, transport_is_external=False
+        )
+        document = sum(line.unit_price * line.qty for line in result.lines)
+        inne = sum(line.inne * line.qty for line in result.lines)
+        self.assertAlmostEqual(result.document_total, 41.0)
+        self.assertAlmostEqual(document, 41.0, places=2)
+        self.assertAlmostEqual(inne, 0.0, places=2)
+        self.assertTrue(result.matched)
+
+    def test_external_transport_stays_off_the_document(self):
+        df = pd.DataFrame(
+            [
+                ["1", "LE-A", 1, "tray", 80.0, 0.0, 80.00],
+                ["2", "LE-B", 1, "bowl", 20.0, 0.0, 20.00],
+            ],
+            columns=["EAN", "Product_code", "Qty_shipped", "Description", "Price", "Discount", "Value"],
+        )
+        result = prices_for_buffer(
+            df, pdf_total_amount=90.00, transport_cost=10.0, transport_is_external=True
+        )
+        document = sum(line.unit_price * line.qty for line in result.lines)
+        inne = sum(line.inne * line.qty for line in result.lines)
+        self.assertAlmostEqual(result.header_discount, 10.0)
+        self.assertAlmostEqual(result.document_total, 90.0)
+        self.assertAlmostEqual(document, 90.0, places=2)
+        self.assertAlmostEqual(inne, 10.0, places=2)
+        self.assertTrue(result.matched)
+
+    def test_pack_freight_lowers_the_first_warehouse_value(self):
+        columns = ["EAN", "Product_code", "Qty_shipped", "Description", "Price", "Discount", "Value"]
+        first = ParseResult(
+            vendor="Churchill",
+            pdf_total_amount=130.0,
+            transport_cost=30.0,
+            transport_is_external=False,
+            rows=pd.DataFrame([["0", "CH-A", 1, "bowl", 100.0, 0.0, 100.0]], columns=columns),
+            invoice_number="CD1",
+        )
+        second = ParseResult(
+            vendor="Churchill",
+            pdf_total_amount=100.0,
+            transport_cost=0.0,
+            transport_is_external=False,
+            rows=pd.DataFrame([["0", "CH-B", 1, "plate", 100.0, 0.0, 100.0]], columns=columns),
+            invoice_number="CD2",
+        )
+        spread = _spread_pack_freight([first, second])
+        self.assertAlmostEqual(spread[0].warehouse_transport, 15.0)
+        self.assertAlmostEqual(spread[1].warehouse_transport, 15.0)
+        priced = [
+            prices_for_buffer(
+                item.rows,
+                item.pdf_total_amount,
+                item.transport_cost,
+                transport_is_external=item.transport_is_external,
+                warehouse_transport=item.warehouse_transport,
+            )
+            for item in spread
+        ]
+        document = [sum(line.unit_price * line.qty for line in item.lines) for item in priced]
+        warehouse = [sum((line.unit_price + line.inne) * line.qty for line in item.lines) for item in priced]
+        self.assertAlmostEqual(document[0], 130.0, places=2)
+        self.assertAlmostEqual(document[1], 100.0, places=2)
+        self.assertAlmostEqual(warehouse[0], 115.0, places=2)
+        self.assertAlmostEqual(warehouse[1], 115.0, places=2)
+        self.assertLess(warehouse[0], document[0])
+        self.assertGreater(warehouse[1], document[1])
 
     def test_format_money_uses_invoice_currency_symbol(self):
         self.assertEqual(format_money(2737.66, "GBP"), "2737.66 £")

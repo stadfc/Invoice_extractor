@@ -5,7 +5,7 @@ open PDF → drop zero rows → format for import → save Excel.
 
 Never overwrites existing files unless --force is passed.
 Never deletes or moves source PDFs.
-Skips Leone / Sola Swiss invoices that need a transport amount
+Skips Leone, Sola Swiss, Mesa and Bonna invoices that need a transport amount
 unless it was found on the PDF or --transport is provided.
 """
 
@@ -155,7 +155,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--allow-missing-transport",
         action="store_true",
-        help="Process Leone/Sola Swiss even if transport is 0 (usually wrong for ERP)",
+        help="Process Leone, Sola Swiss, Mesa and Bonna even if transport is 0 (usually wrong for ERP)",
     )
     parser.add_argument(
         "--report",
