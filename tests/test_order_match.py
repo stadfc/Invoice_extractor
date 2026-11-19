@@ -52,7 +52,7 @@ class OrderMatchTests(unittest.TestCase):
         )
         self.assertEqual(report.proposed_number, "0003/26/ZWW")
         self.assertEqual(report.missing, ())
-        self.assertEqual(report.headline, "Przed powiązaniem dopisz do 0003/26/ZWW 1 pozycję")
+        self.assertEqual(report.headline, "Przed powiązaniem podnieś ilość w 0003/26/ZWW w 1 pozycji")
         self.assertEqual(len(report.surplus), 1)
         item = report.surplus[0]
         self.assertEqual(item.code, "BN-GRM30DZ")
@@ -65,7 +65,7 @@ class OrderMatchTests(unittest.TestCase):
         text = clipboard_text(report, "0013/26/DIM")
         self.assertIn("Dokument 0013/26/DIM.", text)
         self.assertIn("podnieś ilość w 0003/26/ZWW z 48 do 252", text)
-        self.assertIn("0008/25/ZMW (12 szt.)", text)
+        self.assertIn("0008/25/ZMW (zamówiono 12 szt.)", text)
         self.assertNotIn("0009/26/ZWW", text)
 
     def test_excel_export_keeps_the_headline_and_the_surplus(self):
@@ -82,8 +82,9 @@ class OrderMatchTests(unittest.TestCase):
         import pandas as pd
 
         frame = pd.read_excel(path, sheet_name="Powiązanie", header=None)
-        self.assertEqual(frame.iloc[0, 0], "Przed powiązaniem dopisz do 0003/26/ZWW 1 pozycję")
+        self.assertEqual(frame.iloc[0, 0], "Przed powiązaniem podnieś ilość w 0003/26/ZWW w 1 pozycji")
         self.assertIn("0013/26/DIM", str(frame.iloc[1, 0]))
+        self.assertIn("ilość zamówiona", str(frame.iloc[2, 0]))
         table = pd.read_excel(path, sheet_name="Powiązanie", header=3)
         self.assertEqual(table.iloc[0]["Kod"], "BN-GRM30DZ")
         self.assertEqual(table.iloc[0]["Polecenie"], "podnieś ilość w 0003/26/ZWW z 48 do 252")
@@ -204,3 +205,67 @@ class OwnOrderReadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadlineAndCacheTests(unittest.TestCase):
+    def test_surplus_only_says_raise_quantity(self):
+        report = match_invoice_to_orders(
+            [("BN-A", 84), ("BN-B", 252)],
+            [OwnOrderSnapshot("0003/26/ZWW", "2026-10-29", {"BN-A": 24, "BN-B": 48})],
+        )
+        self.assertEqual(report.headline, "Przed powiązaniem podnieś ilość w 0003/26/ZWW w 2 pozycjach")
+
+    def test_missing_and_surplus_together(self):
+        report = match_invoice_to_orders(
+            [("BN-A", 84), ("BN-NEW", 1)],
+            [OwnOrderSnapshot("0003/26/ZWW", "2026-10-29", {"BN-A": 24})],
+        )
+        self.assertEqual(
+            report.headline, "Przed powiązaniem dopisz do 0003/26/ZWW 1 pozycję i podnieś ilość w 1 pozycji"
+        )
+
+    def test_older_orders_show_ordered_quantity_with_a_note(self):
+        from order_match import OLDER_ORDERS_NOTE, clipboard_text
+
+        report = match_invoice_to_orders(
+            [("CO-1", 10), ("CO-2", 1)],
+            [
+                OwnOrderSnapshot("0006/26/ZWW", "2026-11-09", {"CO-2": 1}),
+                OwnOrderSnapshot("0002/26/ZWW", "2026-09-01", {"CO-1": 80}),
+            ],
+        )
+        text = clipboard_text(report)
+        self.assertIn("0002/26/ZWW (zamówiono 80 szt.)", text)
+        self.assertIn(OLDER_ORDERS_NOTE, text)
+
+    def test_finished_orders_are_not_read_twice_open_ones_are(self):
+        import json
+
+        import symfonia_orders
+
+        symfonia_orders._FINISHED.clear()
+        self.addCleanup(symfonia_orders._FINISHED.clear)
+        calls = []
+
+        class Session:
+            def call(self, method, path, body=None):
+                calls.append(path)
+                if "/Filter/" in path:
+                    return 200, json.dumps([
+                        {"Id": 1, "TypeCode": "ZWW", "DocumentNumber": "1/26/ZWW", "IssueDate": "2026-10-01"},
+                        {"Id": 2, "TypeCode": "ZWW", "DocumentNumber": "2/26/ZWW", "IssueDate": "2026-11-01"},
+                    ])
+                if path.endswith("/OwnOrders/1"):
+                    return 200, json.dumps({"Settled": True, "Positions": []})
+                if "/Status/" in path:
+                    return 200, json.dumps({"DocumentStatusText": "Niezrealizowane"})
+                return 200, json.dumps({"Positions": [{"ProductCode": "CO-1", "Quantity": -5}]})
+
+        first = symfonia_orders.read_open_orders(Session(), "CONTACTO")
+        reads_first = len(calls)
+        calls.clear()
+        second = symfonia_orders.read_open_orders(Session(), "CONTACTO")
+        self.assertEqual([o.number for o in first], ["2/26/ZWW"])
+        self.assertEqual([o.number for o in second], ["2/26/ZWW"])
+        self.assertFalse(any(path.endswith("/OwnOrders/1") for path in calls))
+        self.assertLess(len(calls), reads_first)

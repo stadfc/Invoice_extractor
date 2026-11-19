@@ -93,11 +93,7 @@ def match_invoice_to_orders(
         for code, qty in sorted(proposed.quantities.items())
         if code not in invoice and qty > 0
     )
-    count = len(missing) + len(surplus)
-    if count == 0:
-        headline = f"Faktura da się powiązać z {proposed.number} bez zmian"
-    else:
-        headline = f"Przed powiązaniem dopisz do {proposed.number} {count} {_pozycji(count)}"
+    headline = _headline(proposed.number, len(missing), len(surplus))
     return MatchReport(
         proposed_number=proposed.number,
         proposed_date=proposed.issue_date,
@@ -106,6 +102,19 @@ def match_invoice_to_orders(
         surplus=tuple(surplus),
         only_on_order=only_on_order,
     )
+
+
+def _headline(number: str, missing: int, surplus: int) -> str:
+    """What to change in the order: add missing products, raise quantities, or nothing."""
+    if not missing and not surplus:
+        return f"Faktura da się powiązać z {number} bez zmian"
+    steps = []
+    if missing:
+        steps.append(f"dopisz do {number} {missing} {_pozycji(missing)}")
+    if surplus:
+        where = f" w {number}" if not missing else ""
+        steps.append(f"podnieś ilość{where} w {surplus} {_pozycjach(surplus)}")
+    return "Przed powiązaniem " + " i ".join(steps)
 
 
 def _older_waiting(
@@ -149,7 +158,7 @@ def export_rows(report: MatchReport) -> list[dict]:
                 "Ilość na fakturze": item.quantity,
                 "Ilość w zamówieniu": 0,
                 "Polecenie": f"dopisz do {order}" if order else "dopisz do zamówienia",
-                "Starsze ZWW/ZMW": _waiting_text(item.elsewhere),
+                "Starsze ZWW/ZMW (ilość zamówiona)": _waiting_text(item.elsewhere),
             }
         )
     for item in report.surplus:
@@ -163,7 +172,7 @@ def export_rows(report: MatchReport) -> list[dict]:
                     f"podnieś ilość w {order} z {_qty_text(item.order_quantity)} "
                     f"do {_qty_text(item.invoice_quantity)}"
                 ),
-                "Starsze ZWW/ZMW": _waiting_text(item.elsewhere),
+                "Starsze ZWW/ZMW (ilość zamówiona)": _waiting_text(item.elsewhere),
             }
         )
     for code, qty in report.only_on_order:
@@ -174,7 +183,7 @@ def export_rows(report: MatchReport) -> list[dict]:
                 "Ilość na fakturze": 0,
                 "Ilość w zamówieniu": qty,
                 "Polecenie": "nie blokuje powiązania",
-                "Starsze ZWW/ZMW": "",
+                "Starsze ZWW/ZMW (ilość zamówiona)": "",
             }
         )
     return rows
@@ -185,6 +194,8 @@ def clipboard_text(report: MatchReport, document_number: str = "") -> str:
     detail = _export_detail(report, document_number)
     if detail:
         lines.append(detail)
+    if report.missing or report.surplus:
+        lines.append(OLDER_ORDERS_NOTE)
     lines.append("")
     headers = list(EXPORT_COLUMNS)
     lines.append("\t".join(headers))
@@ -193,13 +204,19 @@ def clipboard_text(report: MatchReport, document_number: str = "") -> str:
     return "\n".join(lines)
 
 
+# The WebAPI gives an own-order line's ordered quantity only, not how much of it has arrived.
+OLDER_ORDERS_NOTE = (
+    "Przy starszych zamówieniach podana jest ilość zamówiona – część mogła już dotrzeć. "
+    "Przed zmianą starszego zamówienia sprawdź jego realizację w Symfonii."
+)
+
 EXPORT_COLUMNS = (
     "Rodzaj",
     "Kod",
     "Ilość na fakturze",
     "Ilość w zamówieniu",
     "Polecenie",
-    "Starsze ZWW/ZMW",
+    "Starsze ZWW/ZMW (ilość zamówiona)",
 )
 
 
@@ -217,7 +234,7 @@ def _export_detail(report: MatchReport, document_number: str) -> str:
 def _waiting_text(waiting: tuple[WaitingElsewhere, ...]) -> str:
     if not waiting:
         return "nie ma na starszych ZWW/ZMW"
-    return "; ".join(f"{item.number} ({_qty_text(item.quantity)} szt.)" for item in waiting)
+    return "; ".join(f"{item.number} (zamówiono {_qty_text(item.quantity)} szt.)" for item in waiting)
 
 
 def _cell(value) -> str:
@@ -238,6 +255,10 @@ def _pl_date(iso: str) -> str:
         year, month, day = text.split("-")
         return f"{day}.{month}.{year}"
     return text
+
+
+def _pozycjach(count: int) -> str:
+    return "pozycji" if count == 1 else "pozycjach"
 
 
 def _pozycji(count: int) -> str:

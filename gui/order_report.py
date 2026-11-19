@@ -4,7 +4,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import pandas as pd
 
-from order_match import EXPORT_COLUMNS, MatchReport, clipboard_text, export_rows
+from order_match import EXPORT_COLUMNS, OLDER_ORDERS_NOTE, MatchReport, clipboard_text, export_rows
 
 
 class OrderLinkWindow(tk.Toplevel):
@@ -27,6 +27,10 @@ class OrderLinkWindow(tk.Toplevel):
         detail = _detail_line(report, document_number)
         if detail:
             ttk.Label(frame, text=detail, wraplength=820).pack(anchor=tk.W, pady=(0, 8))
+        if report.missing or report.surplus:
+            ttk.Label(frame, text=OLDER_ORDERS_NOTE, wraplength=820, foreground="#6b4e00").pack(
+                anchor=tk.W, pady=(0, 8)
+            )
 
         table_frame = ttk.Frame(frame)
         table_frame.pack(fill=tk.BOTH, expand=True)
@@ -41,7 +45,7 @@ class OrderLinkWindow(tk.Toplevel):
         tree.heading("kind", text="Rodzaj")
         tree.heading("code", text="Kod")
         tree.heading("qty", text="Ilość")
-        tree.heading("note", text="Inne zamówienia")
+        tree.heading("note", text="Starsze zamówienia (ilość zamówiona)")
         tree.column("kind", width=160, anchor=tk.W)
         tree.column("code", width=160, anchor=tk.W)
         tree.column("qty", width=80, anchor=tk.E)
@@ -128,7 +132,7 @@ def _surplus_note(order_number: str, item) -> str:
 def _elsewhere(waiting) -> str:
     if not waiting:
         return "nie ma na starszych ZWW/ZMW"
-    return "; ".join(f"{item.number} ({_qty(item.quantity)} szt.)" for item in waiting)
+    return "; ".join(f"{item.number} (zamówiono {_qty(item.quantity)} szt.)" for item in waiting)
 
 
 def _qty(value: float) -> str:
@@ -144,6 +148,8 @@ def _write_excel(path: str, report: MatchReport, document_number: str) -> None:
         sheet = writer.sheets["Powiązanie"]
         sheet["A1"] = report.headline
         sheet["A2"] = _detail_line(report, document_number)
+        if report.missing or report.surplus:
+            sheet["A3"] = OLDER_ORDERS_NOTE
 
 
 def _excel_name(number: str) -> str:
