@@ -44,6 +44,7 @@ class InvoiceParserApp:
         self.current_currency = "EUR"
         self.documents = []
         self.document_index = 0
+        self.link_history = []
 
         self.is_import_format_active = False
 
@@ -104,6 +105,13 @@ class InvoiceParserApp:
             state=tk.DISABLED,
         )
         self.btn_buffer.pack(side=tk.LEFT, padx=5)
+
+        self.btn_order_link = ttk.Button(
+            sym_row,
+            text="Sprawdź powiązanie z zamówieniem",
+            command=self.check_order_link,
+        )
+        self.btn_order_link.pack(side=tk.LEFT, padx=5)
 
         self.btn_rates = ttk.Button(sym_row, text="Kursy", command=self.edit_rates)
         self.btn_rates.pack(side=tk.LEFT, padx=5)
@@ -394,6 +402,79 @@ class InvoiceParserApp:
             f"{created}",
         )
         self.lbl_status.config(text=f"Status: W buforze {result.number}.")
+        saved_lines = [(line.code, float(line.qty)) for line in prices.lines]
+        self.link_history.append({"number": result.number, "vendor": doc.vendor, "lines": saved_lines})
+        try:
+            self._present_order_link(doc.vendor, saved_lines, result.number)
+        except Exception as exc:
+            messagebox.showwarning(
+                "Powiązanie z zamówieniem",
+                f"Dokument {result.number} jest w buforze. Nie udało się sprawdzić zamówień.\n{exc}",
+            )
+
+    def check_order_link(self):
+        try:
+            vendor, lines, number = self._link_subject()
+        except Exception as exc:
+            messagebox.showwarning("Powiązanie z zamówieniem", str(exc))
+            return
+        if not lines:
+            messagebox.showwarning("Powiązanie z zamówieniem", "Na fakturze nie ma pozycji do porównania.")
+            return
+        self.lbl_status.config(text="Status: Sprawdzanie zamówień...")
+        self.root.update_idletasks()
+        try:
+            self._present_order_link(vendor, lines, number)
+        except Exception as exc:
+            messagebox.showwarning("Powiązanie z zamówieniem", str(exc))
+            self.lbl_status.config(text="Status: Nie udało się sprawdzić zamówień.")
+            return
+        self.lbl_status.config(text="Status: Sprawdzono powiązanie z zamówieniem.")
+
+    def _link_subject(self):
+        doc = self._current_document()
+        if doc is not None and not doc.rows.empty:
+            lines = [
+                (str(row["Product_code"]), float(row["Qty_shipped"]))
+                for _, row in doc.rows.iterrows()
+            ]
+            number = ""
+            for item in reversed(self.link_history):
+                if item["vendor"] == doc.vendor:
+                    number = item["number"]
+                    break
+            return doc.vendor, lines, number
+        if self.link_history:
+            item = self.link_history[-1]
+            return item["vendor"], item["lines"], item["number"]
+        number = simpledialog.askstring(
+            "Powiązanie z zamówieniem",
+            "Podaj numer dokumentu w Symfonii, np. 0293/26/WNT:",
+            parent=self.root,
+        )
+        if not number or not str(number).strip():
+            raise RuntimeError("Nie podano numeru dokumentu.")
+        from symfonia_api import SymfoniaSession
+        from symfonia_orders import load_purchase_lines
+
+        with SymfoniaSession() as session:
+            seller_code, lines = load_purchase_lines(session, str(number).strip())
+        return seller_code, lines, str(number).strip()
+
+    def _present_order_link(self, vendor_or_code, lines, document_number):
+        from gui.order_report import OrderLinkWindow
+        from order_match import match_invoice_to_orders
+        from symfonia_api import SymfoniaSession
+        from symfonia_import import VENDORS
+        from symfonia_orders import read_open_orders
+
+        seller_code = VENDORS.get(vendor_or_code, (vendor_or_code, ""))[0]
+        if not seller_code:
+            raise RuntimeError("Ten dostawca nie ma kodu kontrahenta.")
+        with SymfoniaSession() as session:
+            orders = read_open_orders(session, seller_code)
+        report = match_invoice_to_orders(lines, orders)
+        OrderLinkWindow(self.root, report, document_number)
 
     def _code_report(self, doc):
         from symfonia_api import SymfoniaSession
