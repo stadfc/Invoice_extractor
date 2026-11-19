@@ -203,3 +203,33 @@ class ExchangeRateTests(unittest.TestCase):
         self.assertAlmostEqual(payload["Positions"][0]["Value"], 517.0)
         self.assertAlmostEqual(payload["Positions"][0]["Duty"], 408.43)
         self.assertEqual(payload["MaturityDate"], "2026-11-23")
+
+
+class ApiVersionTests(unittest.TestCase):
+    def test_default_and_override_from_environment(self):
+        import os
+        from unittest.mock import patch
+
+        import symfonia_api
+
+        with patch.object(symfonia_api, "ENV_FILE", Path(tempfile.gettempdir()) / "brak-symfonia.env"):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SYMFONIA_WEBAPI_VERSION", None)
+                self.assertEqual(symfonia_api.api_version(), "v2026.3")
+            with patch.dict(os.environ, {"SYMFONIA_WEBAPI_VERSION": "/v2026.4/"}):
+                self.assertEqual(symfonia_api.api_version(), "v2026.4")
+
+    def test_check_codes_uses_configured_version(self):
+        import os
+        from unittest.mock import patch
+
+        seen = []
+
+        class Recorder(FakeSession):
+            def call(self, method, path, body=None):
+                seen.append(path)
+                return super().call(method, path, body)
+
+        with patch.dict(os.environ, {"SYMFONIA_WEBAPI_VERSION": "v2026.4"}):
+            check_codes(Recorder({"LE-1"}), ["LE-1"])
+        self.assertTrue(seen and all(path.startswith("/api/v2026.4/") for path in seen))

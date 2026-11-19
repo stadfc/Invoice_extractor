@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 from exchange_rates import RateError, rate_for
 from pipeline import BufferPrices, prices_for_buffer
-from symfonia_api import API_VERSION, SymfoniaError, SymfoniaSession
+from symfonia_api import SymfoniaError, SymfoniaSession, api_version
 
 # Contractor shortcut and code prefix, taken from the quoting app's supplier list.
 VENDORS = {
@@ -132,7 +132,7 @@ def save_wnt_buffer(
         vendor=vendor,
         payment_days=payment_days,
     )
-    _status, raw = session.call("POST", f"/api/{API_VERSION}/PurchasesIssue/New/false", payload)
+    _status, raw = session.call("POST", f"/api/{api_version()}/PurchasesIssue/New/false", payload)
     number, document_id = _created_document(raw)
     # The purchase document stores the invoice in its own currency. The warehouse
     # document values the goods from the card, so the PLN purchase price has to
@@ -191,7 +191,7 @@ def _product(session: SymfoniaSession, code: str) -> dict | None:
 def _product_id(session: SymfoniaSession, code: str) -> int | None:
     _status, raw = session.call(
         "PATCH",
-        f"/api/{API_VERSION}/Products/FilterSql",
+        f"/api/{api_version()}/Products/FilterSql",
         {"Code": {"Value": code, "Mode": "Equals"}},
     )
     try:
@@ -211,7 +211,7 @@ def _product_id(session: SymfoniaSession, code: str) -> int | None:
 
 def _product_by_id(session: SymfoniaSession, product_ref: int | str) -> dict | None:
     try:
-        _status, raw = session.call("GET", f"/api/{API_VERSION}/Products/{product_ref}")
+        _status, raw = session.call("GET", f"/api/{api_version()}/Products/{product_ref}")
     except SymfoniaError as exc:
         if exc.status == 404:
             return None
@@ -228,7 +228,7 @@ def _product_by_id(session: SymfoniaSession, product_ref: int | str) -> dict | N
 def _require_contractor(session: SymfoniaSession, code: str) -> None:
     encoded = quote(code, safe="")
     try:
-        session.call("GET", f"/api/{API_VERSION}/Contractors/{encoded}")
+        session.call("GET", f"/api/{api_version()}/Contractors/{encoded}")
     except SymfoniaError as exc:
         if exc.status == 404:
             raise SymfoniaError(f"Brak kontrahenta {code} w Symfonii.") from exc
@@ -318,7 +318,7 @@ def _create_product(session: SymfoniaSession, template: dict, line, currency: st
             "Value": round(line.unit_price * base_value / template_currency, 2),
             "Currency": (base.get("Currency") or currency),
         }
-    session.call("POST", f"/api/{API_VERSION}/Products/Create", payload)
+    session.call("POST", f"/api/{api_version()}/Products/Create", payload)
 
 
 def _update_purchase_price(
@@ -328,7 +328,7 @@ def _update_purchase_price(
     body = _price_update_body(product, unit_price, inne, currency, rate, duty)
     # The numeric id keeps a slash in the code out of the URL.
     ref = product.get("Id") or quote(code, safe="")
-    session.call("PUT", f"/api/{API_VERSION}/ProductPrices/Update/{ref}", body)
+    session.call("PUT", f"/api/{api_version()}/ProductPrices/Update/{ref}", body)
 
 
 def _document_payload(

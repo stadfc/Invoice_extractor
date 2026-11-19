@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from urllib.parse import quote
 
 from order_match import OwnOrderSnapshot
-from symfonia_api import API_VERSION, SymfoniaError, SymfoniaSession
+from symfonia_api import SymfoniaError, SymfoniaSession, api_version
 
 # DocumentStatusText for a fully finished order. Partial realization stays open.
 _CLOSED_TEXTS = {"ZREALIZOWANE", "ZAMKNIĘTE", "ZAMKNIETE", "ANULOWANE", "ANULOWANY"}
@@ -32,7 +32,7 @@ def read_open_orders(
     end = today or date.today()
     start = end - timedelta(days=365)
     path = (
-        f"/api/{API_VERSION}/OwnOrders/Filter/{quote(seller, safe='')}"
+        f"/api/{api_version()}/OwnOrders/Filter/{quote(seller, safe='')}"
         f"/{start.isoformat()}/{end.isoformat()}"
     )
     _status, raw = session.call("GET", path)
@@ -66,7 +66,7 @@ def load_purchase_lines(session: SymfoniaSession, document_number: str) -> tuple
     document = None
     for source in ("FromBuffer", "Issued"):
         try:
-            _status, raw = session.call("GET", f"/api/{API_VERSION}/Purchases/{source}/{encoded}")
+            _status, raw = session.call("GET", f"/api/{api_version()}/Purchases/{source}/{encoded}")
         except SymfoniaError as exc:
             if exc.status == 404:
                 continue
@@ -78,7 +78,7 @@ def load_purchase_lines(session: SymfoniaSession, document_number: str) -> tuple
     seller_id = document.get("SellerId") or document.get("DelivererId")
     if not seller_id:
         raise SymfoniaError(f"Dokument {number} nie ma kontrahenta.")
-    _status, raw = session.call("GET", f"/api/{API_VERSION}/Contractors/{seller_id}")
+    _status, raw = session.call("GET", f"/api/{api_version()}/Contractors/{seller_id}")
     contractor = json.loads(raw or "null")
     code = ""
     if isinstance(contractor, dict):
@@ -99,7 +99,7 @@ def _open_order_quantities(session: SymfoniaSession, order_id) -> dict[str, floa
     seen = _FINISHED.get(key)
     if seen is not None and time.monotonic() - seen < CACHE_SECONDS:
         return None
-    _status, raw = session.call("GET", f"/api/{API_VERSION}/OwnOrders/{order_id}")
+    _status, raw = session.call("GET", f"/api/{api_version()}/OwnOrders/{order_id}")
     detail = json.loads(raw or "null")
     # A settled order is finished: no need to ask for its status separately.
     if (isinstance(detail, dict) and detail.get("Settled") is True) or _status_is_closed(session, order_id):
@@ -123,7 +123,7 @@ def _position_quantities(detail) -> dict[str, float]:
 
 def _status_is_closed(session: SymfoniaSession, order_id) -> bool:
     try:
-        _status, raw = session.call("GET", f"/api/{API_VERSION}/OwnOrders/Status/{order_id}")
+        _status, raw = session.call("GET", f"/api/{api_version()}/OwnOrders/Status/{order_id}")
     except SymfoniaError:
         return False
     info = json.loads(raw or "null")
