@@ -1,4 +1,10 @@
-"""Symfonia WebAPI session. The token is read from symfonia.env next to this file."""
+"""Symfonia WebAPI session. The token is read from symfonia.env next to this file.
+
+symfonia.env may also set SYMFONIA_WEBAPI_VERSION, the path prefix (api/<version>/...),
+when a WebAPI update drops the default one. Check the connection after an update with:
+
+    python symfonia_api.py [PRODUCT_CODE]
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-API_VERSION = "v2026.3"
+DEFAULT_API_VERSION = "v2026.3"
 CLIENT_ID = "invoice-extractor"
 DEFAULT_URL = "https://www.kjgastro.com.pl:9000"
 ENV_FILE = Path(__file__).with_name("symfonia.env")
@@ -36,6 +42,12 @@ def _load_env_file(path: Path) -> None:
         value = value.strip().strip('"').strip("'")
         if key:
             os.environ.setdefault(key, value)
+
+
+def api_version() -> str:
+    """Path prefix of every WebAPI call: SYMFONIA_WEBAPI_VERSION from symfonia.env, else the default."""
+    _load_env_file(ENV_FILE)
+    return (os.environ.get("SYMFONIA_WEBAPI_VERSION") or "").strip().strip("/") or DEFAULT_API_VERSION
 
 
 def api_settings() -> tuple[str, str]:
@@ -80,7 +92,7 @@ class SymfoniaSession:
 
     def __enter__(self):
         _status, raw = self._request(
-            f"/api/{API_VERSION}/Sessions/OpenNewSession/{CLIENT_ID}",
+            f"/api/{api_version()}/Sessions/OpenNewSession/{CLIENT_ID}",
             f"Application {self.token}",
         )
         self.session = _session_id(raw)
@@ -88,7 +100,7 @@ class SymfoniaSession:
 
     def __exit__(self, exc_type, exc, tb):
         try:
-            self._request(f"/api/{API_VERSION}/Sessions/CloseSession", f"Session {self.session}")
+            self._request(f"/api/{api_version()}/Sessions/CloseSession", f"Session {self.session}")
         except SymfoniaError:
             pass
         return False
@@ -122,3 +134,40 @@ def _session_id(raw: str) -> str:
     if not isinstance(parsed, str) or not parsed:
         raise SymfoniaError("Symfonia nie otworzyła sesji.")
     return parsed
+
+
+def check(code: str = "") -> int:
+    """Open a session and, with a product code, read that product's card. 0 = works."""
+    version = api_version()
+    try:
+        url, _token = api_settings()
+    except SymfoniaError as exc:
+        print(f"BŁĄD: {exc}")
+        return 2
+    print(f"WebAPI {url}, wersja ścieżek {version}")
+    try:
+        with SymfoniaSession() as session:
+            print("OK    sesja otwarta")
+            if code:
+                _status, raw = session.call(
+                    "PATCH", f"/api/{version}/Products/FilterSql", {"Code": {"Value": code, "Mode": "Equals"}}
+                )
+                rows = json.loads(raw or "null")
+                if isinstance(rows, dict):
+                    rows = rows.get("data") or []
+                found = [row for row in rows or [] if isinstance(row, dict) and row.get("Code") == code]
+                if not found:
+                    print(f"BŁĄD  towar {code} nie znaleziony")
+                    return 1
+                session.call("GET", f"/api/{version}/Products/{int(found[0]['Id'])}")
+                print(f"OK    karta towaru {code} odczytana")
+    except (SymfoniaError, ValueError, KeyError, TypeError) as exc:
+        print(f"BŁĄD: {exc}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    raise SystemExit(check(sys.argv[1] if len(sys.argv) > 1 else ""))
